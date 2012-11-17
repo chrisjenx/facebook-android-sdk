@@ -1304,7 +1304,7 @@ public class Request {
             Object value = this.parameters.get(key);
             if (Serializer.isSupportedAttachmentType(value)) {
                 // Make the name unique across this entire batch.
-                String name = String.format("%s%d", ATTACHMENT_FILENAME_PREFIX, attachments.size());
+                String name = String.format(Locale.getDefault(),"%s%d", ATTACHMENT_FILENAME_PREFIX, attachments.size());
                 attachmentNames.add(name);
                 Utility.putObjectInBundle(attachments, name, value);
             }

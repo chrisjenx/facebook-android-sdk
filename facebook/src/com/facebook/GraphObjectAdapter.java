@@ -182,7 +182,7 @@ class GraphObjectAdapter<T extends GraphObject> extends BaseAdapter implements S
         if (groupByField != null) {
             result = (String) graphObject.getProperty(groupByField);
             if (result != null && result.length() > 0) {
-                result = result.substring(0, 1).toUpperCase();
+                result = result.substring(0, 1).toUpperCase(Locale.getDefault());
             }
         }
 
@@ -365,7 +365,7 @@ class GraphObjectAdapter<T extends GraphObject> extends BaseAdapter implements S
 
         // Note: these dimensions are in pixels, not dips
         ViewGroup.LayoutParams layoutParams = picture.getLayoutParams();
-        return String.format("picture.height(%d).width(%d)", layoutParams.height, layoutParams.width);
+        return String.format(Locale.getDefault(), "picture.height(%d).width(%d)", layoutParams.height, layoutParams.width);
     }
 
 
