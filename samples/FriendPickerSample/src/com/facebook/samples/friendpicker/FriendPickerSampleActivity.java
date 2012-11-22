@@ -23,7 +23,7 @@ import android.text.TextUtils;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
-import com.facebook.GraphUser;
+import com.facebook.model.GraphUser;
 import com.facebook.Session;
 
 import java.util.ArrayList;
@@ -50,29 +50,24 @@ public class FriendPickerSampleActivity extends FragmentActivity {
             }
         });
 
-        Session.openActiveSession(this, true);
+        if (Session.getActiveSession() == null ||
+                Session.getActiveSession().isClosed()) {
+            Session.openActiveSession(this, true);
+        }
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+
+        // Update the display every time we are started.
+        displaySelectedFriends(RESULT_OK);
     }
 
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         switch (requestCode) {
             case PICK_FRIENDS_ACTIVITY:
-                String results = "";
-                if (resultCode == RESULT_OK) {
-                    FriendPickerApplication application = (FriendPickerApplication)getApplication();
-                    Collection<GraphUser> selection = application.getSelectedUsers();
-                    if (selection != null && selection.size() > 0) {
-                        ArrayList<String> names = new ArrayList<String>();
-                        for (GraphUser user : selection) {
-                            names.add(user.getName());
-                        }
-                        results = TextUtils.join(", ", names);
-                    } else {
-                        results = "<No friends selected>";
-                    }
-                } else {
-                    results = "<Cancelled>";
-                }
-                resultsTextView.setText(results);
+                displaySelectedFriends(resultCode);
                 break;
             default:
                 Session.getActiveSession().onActivityResult(this, requestCode, resultCode, data);
@@ -80,7 +75,28 @@ public class FriendPickerSampleActivity extends FragmentActivity {
         }
     }
 
+    private void displaySelectedFriends(int resultCode) {
+        String results = "";
+        FriendPickerApplication application = (FriendPickerApplication) getApplication();
+
+        Collection<GraphUser> selection = application.getSelectedUsers();
+        if (selection != null && selection.size() > 0) {
+            ArrayList<String> names = new ArrayList<String>();
+            for (GraphUser user : selection) {
+                names.add(user.getName());
+            }
+            results = TextUtils.join(", ", names);
+        } else {
+            results = "<No friends selected>";
+        }
+
+        resultsTextView.setText(results);
+    }
+
     private void onClickPickFriends() {
+        FriendPickerApplication application = (FriendPickerApplication) getApplication();
+        application.setSelectedUsers(null);
+
         Intent intent = new Intent(this, PickFriendsActivity.class);
         // Note: The following line is optional, as multi-select behavior is the default for
         // FriendPickerFragment. It is here to demonstrate how parameters could be passed to the

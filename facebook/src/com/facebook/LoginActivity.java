@@ -1,3 +1,19 @@
+/**
+ * Copyright 2012 Facebook
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.facebook;
 
 import android.Manifest;
@@ -7,10 +23,12 @@ import android.app.Dialog;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.CookieSyncManager;
 import com.facebook.android.*;
+import com.facebook.internal.ServerProtocol;
+import com.facebook.internal.Utility;
+import com.facebook.widget.WebDialog;
 
 /**
  * This class addresses the issue of a potential window leak during
@@ -61,35 +79,25 @@ public class LoginActivity extends Activity {
         // The call to clear cookies will create the first instance of CookieSyncManager if necessary
         Utility.clearFacebookCookies(this);
 
-        Facebook.DialogListener listener = new Facebook.DialogListener() {
-            public void onComplete(Bundle bundle) {
-                // Ensure any cookies set by the dialog are saved
-                CookieSyncManager.getInstance().sync();
-                setResultAndFinish(Activity.RESULT_OK, bundle);
-            }
-
-            public void onError(DialogError error) {
-                Bundle bundle = null;
-                if (error != null) {
-                    bundle = new Bundle();
-                    bundle.putInt(Session.WEB_VIEW_ERROR_CODE_KEY, error.getErrorCode());
-                    bundle.putString(Session.WEB_VIEW_FAILING_URL_KEY, error.getFailingUrl());
+        WebDialog.OnCompleteListener listener = new WebDialog.OnCompleteListener() {
+            @Override
+            public void onComplete(Bundle values, FacebookException error) {
+                if (values != null) {
+                    // Ensure any cookies set by the dialog are saved
+                    CookieSyncManager.getInstance().sync();
+                    setResultAndFinish(Activity.RESULT_OK, values);
+                } else {
+                    Bundle bundle = new Bundle();
+                    if (error instanceof FacebookDialogException) {
+                        FacebookDialogException dialogException = (FacebookDialogException) error;
+                        bundle.putInt(Session.WEB_VIEW_ERROR_CODE_KEY, dialogException.getErrorCode());
+                        bundle.putString(Session.WEB_VIEW_FAILING_URL_KEY, dialogException.getFailingUrl());
+                    } else if (error instanceof FacebookOperationCanceledException) {
+                        setResultAndFinish(Activity.RESULT_CANCELED, null);
+                    }
                     bundle.putString("error", error.getMessage());
+                    setResultAndFinish(Activity.RESULT_OK, bundle);
                 }
-                setResultAndFinish(Activity.RESULT_OK, bundle);
-            }
-
-            public void onFacebookError(FacebookError error) {
-                Bundle bundle = null;
-                if (error != null && error.getMessage() != null) {
-                    bundle = new Bundle();
-                    bundle.putString("error", error.getMessage());
-                }
-                setResultAndFinish(Activity.RESULT_OK, bundle);
-            }
-
-            public void onCancel() {
-                setResultAndFinish(Activity.RESULT_CANCELED, null);
             }
 
             private void setResultAndFinish(int resultCode, Bundle bundle) {
@@ -104,14 +112,9 @@ public class LoginActivity extends Activity {
             }
         };
 
-        parameters.putString(ServerProtocol.DIALOG_PARAM_DISPLAY, "touch");
-        parameters.putString(ServerProtocol.DIALOG_PARAM_REDIRECT_URI, "fbconnect://success");
-        parameters.putString(ServerProtocol.DIALOG_PARAM_TYPE, "user_agent");
-        parameters.putString(ServerProtocol.DIALOG_PARAM_CLIENT_ID, getIntent().getStringExtra("client_id"));
-
-        Uri uri = Utility.buildUri(ServerProtocol.DIALOG_AUTHORITY, ServerProtocol.DIALOG_OAUTH_PATH, parameters);
-        loginDialog = new FbDialog(this, uri.toString(), listener);
-        loginDialog.show();
+        WebDialog.Builder builder = new Session.AuthDialogBuilder(this, getIntent().getStringExtra("client_id"), parameters)
+                .setOnCompleteListener(listener);
+        builder.build().show();
     }
 
     @Override

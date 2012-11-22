@@ -28,8 +28,8 @@ import android.support.v4.app.FragmentActivity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
-import com.facebook.GraphLocation;
-import com.facebook.GraphPlace;
+import com.facebook.model.GraphLocation;
+import com.facebook.model.GraphPlace;
 import com.facebook.Session;
 
 public class PlacePickerSampleActivity extends FragmentActivity implements LocationListener {
@@ -87,7 +87,10 @@ public class PlacePickerSampleActivity extends FragmentActivity implements Locat
             }
         });
 
-        Session.openActiveSession(this, true);
+        if (Session.getActiveSession() == null ||
+                Session.getActiveSession().isClosed()) {
+            Session.openActiveSession(this, true);
+        }
 
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
     }
@@ -120,23 +123,21 @@ public class PlacePickerSampleActivity extends FragmentActivity implements Locat
 
     private void displaySelectedPlace(int resultCode) {
         String results = "";
-        if (resultCode == RESULT_OK) {
-            PlacePickerApplication application = (PlacePickerApplication) getApplication();
-            GraphPlace selection = application.getSelectedPlace();
-            if (selection != null) {
-                GraphLocation location = selection.getLocation();
+        PlacePickerApplication application = (PlacePickerApplication) getApplication();
 
-                results = String.format("Name: %s\nCategory: %s\nLocation: (%f,%f)\nStreet: %s, %s, %s, %s, %s",
-                        selection.getName(), selection.getCategory(),
-                        location.getLatitude(), location.getLongitude(),
-                        location.getStreet(), location.getCity(), location.getState(), location.getZip(),
-                        location.getCountry());
-            } else {
-                results = "<No place selected>";
-            }
+        GraphPlace selection = application.getSelectedPlace();
+        if (selection != null) {
+            GraphLocation location = selection.getLocation();
+
+            results = String.format("Name: %s\nCategory: %s\nLocation: (%f,%f)\nStreet: %s, %s, %s, %s, %s",
+                    selection.getName(), selection.getCategory(),
+                    location.getLatitude(), location.getLongitude(),
+                    location.getStreet(), location.getCity(), location.getState(), location.getZip(),
+                    location.getCountry());
         } else {
-            results = "<Cancelled>";
+            results = "<No place selected>";
         }
+
         resultsTextView.setText(results);
     }
 
@@ -156,12 +157,19 @@ public class PlacePickerSampleActivity extends FragmentActivity implements Locat
     public void onProviderDisabled(String provider) {
     }
 
+    private void startPickPlaceActivity(Location location) {
+        PlacePickerApplication application = (PlacePickerApplication) getApplication();
+        application.setSelectedPlace(null);
+
+        Intent intent = new Intent(this, PickPlaceActivity.class);
+        PickPlaceActivity.populateParameters(intent, location, null);
+
+        startActivityForResult(intent, PLACE_ACTIVITY);
+    }
+
     private void onClickSeattle() {
         try {
-            Intent intent = new Intent(this, PickPlaceActivity.class);
-            PickPlaceActivity.populateParameters(intent, SEATTLE_LOCATION, null);
-
-            startActivityForResult(intent, PLACE_ACTIVITY);
+            startPickPlaceActivity(SEATTLE_LOCATION);
         } catch (Exception ex) {
             onError(ex);
         }
@@ -169,10 +177,7 @@ public class PlacePickerSampleActivity extends FragmentActivity implements Locat
 
     private void onClickSanFrancisco() {
         try {
-            Intent intent = new Intent(this, PickPlaceActivity.class);
-            PickPlaceActivity.populateParameters(intent, SAN_FRANCISCO_LOCATION, null);
-
-            startActivityForResult(intent, PLACE_ACTIVITY);
+            startPickPlaceActivity(SAN_FRANCISCO_LOCATION);
         } catch (Exception ex) {
             onError(ex);
         }
@@ -202,10 +207,7 @@ public class PlacePickerSampleActivity extends FragmentActivity implements Locat
                 }
             }
 
-            Intent intent = new Intent(this, PickPlaceActivity.class);
-            PickPlaceActivity.populateParameters(intent, lastKnownLocation, null);
-
-            startActivityForResult(intent, PLACE_ACTIVITY);
+            startPickPlaceActivity(lastKnownLocation);
         } catch (Exception ex) {
             onError(ex);
         }

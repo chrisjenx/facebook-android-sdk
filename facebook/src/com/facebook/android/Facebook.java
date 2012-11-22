@@ -38,29 +38,31 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * NOTE:  New code should not use this class for anything other than dialog
- * functionality.  This class is maintained for backwards compatibility and
- * because not all dialogs are supported natively yet.  However, we do not
- * intend to add new features to this class, and new code should target
- * Session, Request, and native controls instead.
- * <p/>
- * The getSession/setSession methods enable incrementally moving some code
- * to use newer APIs while the rest of the application continues to function
- * against this API.
+ * The functionality in this class is deprecated.  New code should instead use {@link Session}
+ * to manage session state, {@link Request} to make API requests, and
+ * {@link com.facebook.widget.WebDialog} to make dialog requests.
  */
 public class Facebook {
 
     // Strings used in the authorization flow
+    @Deprecated
     public static final String REDIRECT_URI = "fbconnect://success";
+    @Deprecated
     public static final String CANCEL_URI = "fbconnect://cancel";
+    @Deprecated
     public static final String TOKEN = "access_token";
+    @Deprecated
     public static final String EXPIRES = "expires_in";
+    @Deprecated
     public static final String SINGLE_SIGN_ON_DISABLED = "service_disabled";
 
+    @Deprecated
     public static final Uri ATTRIBUTION_ID_CONTENT_URI =
         Uri.parse("content://com.facebook.katana.provider.AttributionIdProvider");
+    @Deprecated
     public static final String ATTRIBUTION_ID_COLUMN_NAME = "aid";
 
+    @Deprecated
     public static final int FORCE_DIALOG_AUTH = -1;
 
     private static final String LOGIN = "oauth";
@@ -69,8 +71,11 @@ public class Facebook {
     private static final int DEFAULT_AUTH_ACTIVITY_CODE = 32665;
 
     // Facebook server endpoints: may be modified in a subclass for testing
+    @Deprecated
     protected static String DIALOG_BASE_URL = "https://m.facebook.com/dialog/";
+    @Deprecated
     protected static String GRAPH_BASE_URL = "https://graph.facebook.com/";
+    @Deprecated
     protected static String RESTSERVER_URL = "https://api.facebook.com/restserver.php";
 
     private final Object lock = new Object();
@@ -102,6 +107,7 @@ public class Facebook {
      *            Your Facebook application ID. Found at
      *            www.facebook.com/developers/apps.php.
      */
+    @Deprecated
     public Facebook(String appId) {
         if (appId == null) {
             throw new IllegalArgumentException("You must specify your application ID when instantiating "
@@ -795,7 +801,9 @@ public class Facebook {
      * <p/>
      * Note that this method is asynchronous and the callback will be invoked in
      * the original calling thread (not in a background thread).
-     * 
+     *
+     * This method is deprecated. See {@link com.facebook.widget.WebDialog}.
+     *
      * @param context
      *            The Android context in which we will generate this dialog.
      * @param action
@@ -805,6 +813,7 @@ public class Facebook {
      *            Callback interface to notify the application when the dialog
      *            has completed.
      */
+    @Deprecated
     public void dialog(Context context, String action, DialogListener listener) {
         dialog(context, action, new Bundle(), listener);
     }
@@ -815,6 +824,8 @@ public class Facebook {
      * <p/>
      * Note that this method is asynchronous and the callback will be invoked in
      * the original calling thread (not in a background thread).
+     *
+     * This method is deprecated. See {@link com.facebook.widget.WebDialog}.
      * 
      * @param context
      *            The Android context in which we will generate this dialog.
@@ -826,9 +837,8 @@ public class Facebook {
      *            Callback interface to notify the application when the dialog
      *            has completed.
      */
+    @Deprecated
     public void dialog(Context context, String action, Bundle parameters, final DialogListener listener) {
-
-        String endpoint = DIALOG_BASE_URL + action;
         parameters.putString("display", "touch");
         parameters.putString("redirect_uri", REDIRECT_URI);
 
@@ -837,16 +847,16 @@ public class Facebook {
             parameters.putString("client_id", mAppId);
         } else {
             parameters.putString("app_id", mAppId);
+            // We do not want to add an access token when displaying the auth dialog.
+            if (isSessionValid()) {
+                parameters.putString(TOKEN, getAccessToken());
+            }
         }
 
-        if (isSessionValid()) {
-            parameters.putString(TOKEN, getAccessToken());
-        }
-        String url = endpoint + "?" + Util.encodeUrl(parameters);
         if (context.checkCallingOrSelfPermission(Manifest.permission.INTERNET) != PackageManager.PERMISSION_GRANTED) {
             Util.showAlert(context, "Error", "Application requires permission to access the Internet");
         } else {
-            new FbDialog(context, url, listener).show();
+            new FbDialog(context, action, parameters, listener).show();
         }
     }
 
@@ -855,6 +865,7 @@ public class Facebook {
      *
      * @return boolean - whether this object has an non-expired session token
      */
+    @Deprecated
     public boolean isSessionValid() {
         return (getAccessToken() != null)
                 && ((getAccessExpires() == 0) || (System.currentTimeMillis() < getAccessExpires()));
@@ -869,6 +880,7 @@ public class Facebook {
      *
      * @param session the Session object to use, cannot be null
      */
+    @Deprecated
     public void setSession(Session session) {
         if (session == null) {
             throw new IllegalArgumentException("session cannot be null");
@@ -890,6 +902,7 @@ public class Facebook {
      * 
      * @return Session - underlying session
      */
+    @Deprecated
     public final Session getSession() {
         while (true) {
             String cachedToken = null;
@@ -963,6 +976,7 @@ public class Facebook {
      *
      * @return String - access token
      */
+    @Deprecated
     public String getAccessToken() {
         Session s = getSession();
         if (s != null) {
@@ -978,6 +992,7 @@ public class Facebook {
      *
      * @return long - session expiration time
      */
+    @Deprecated
     public long getAccessExpires() {
         Session s = getSession();
         if (s != null) {
@@ -993,6 +1008,7 @@ public class Facebook {
      *
      * @return long - timestamp of the last token update.
      */
+    @Deprecated
     public long getLastAccessUpdate() {
         return lastAccessUpdateMillisecondsAfterEpoch;
     }
@@ -1137,7 +1153,7 @@ public class Facebook {
                 TokenCache.putToken(bundle, accessToken);
                 TokenCache.putExpirationMilliseconds(bundle, accessExpiresMillisecondsAfterEpoch);
                 TokenCache.putPermissions(bundle, stringList(pendingAuthorizationPermissions));
-                TokenCache.putIsSSO(bundle, false);
+                TokenCache.putSource(bundle, AccessTokenSource.WEB_VIEW);
                 TokenCache.putLastRefreshMilliseconds(bundle, lastAccessUpdateMillisecondsAfterEpoch);
             }
 
@@ -1199,7 +1215,7 @@ public class Facebook {
     }
 
     /**
-     * Manually publish install attribution to the facebook graph.  Internally handles tracking repeat calls to prevent
+     * Manually publish install attribution to the Facebook graph.  Internally handles tracking repeat calls to prevent
      * multiple installs being published to the graph.
      * <p/>
      * This method is deprecated.  See {@link Facebook} and {@link Settings} for more info.
@@ -1218,6 +1234,7 @@ public class Facebook {
     /**
      * Callback interface for dialog requests.
      * 
+     * This class is deprecated. See {@link com.facebook.widget.WebDialog}.
      */
     public static interface DialogListener {
 
@@ -1282,6 +1299,7 @@ public class Facebook {
 
     }
 
+    @Deprecated
     public static final String FB_APP_SIGNATURE =
         "30820268308201d102044a9c4610300d06092a864886f70d0101040500307a310"
         + "b3009060355040613025553310b30090603550408130243413112301006035504"

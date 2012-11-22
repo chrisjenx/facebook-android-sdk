@@ -25,13 +25,14 @@ import android.os.ConditionVariable;
 import android.os.Handler;
 import android.test.ActivityInstrumentationTestCase2;
 import android.util.Log;
+import com.facebook.model.GraphObject;
+import com.facebook.internal.Utility;
 import junit.framework.AssertionFailedError;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -171,11 +172,8 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
                     fail(errorMessage + "one or both config values are missing");
                 }
 
-                String machineUniqueUserTag = jsonObject.optString("machineUniqueUserTag");
-
                 TestSession.setTestApplicationId(applicationId);
                 TestSession.setTestApplicationSecret(applicationSecret);
-                TestSession.setMachineUniqueUserTag(machineUniqueUserTag);
             } catch (IOException e) {
                 fail(errorMessage + e.toString());
             } catch (JSONException e) {
@@ -252,8 +250,7 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
         Response response = request.executeAndWait();
         assertNotNull(response);
 
-        Exception exception = response.getError();
-        assertNull(exception);
+        assertNull(response.getError());
 
         GraphObject result = response.getGraphObject();
         assertNotNull(result);
@@ -266,8 +263,7 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
         Response response = request.executeAndWait();
         assertNotNull(response);
 
-        Exception exception = response.getError();
-        assertNull(exception);
+        assertNull(response.getError());
 
         GraphObjectPostResult result = response.getGraphObjectAs(GraphObjectPostResult.class);
         assertNotNull(result);
@@ -318,7 +314,7 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
     }
 
     protected GraphObject createStatusUpdate() {
-        GraphObject statusUpdate = GraphObjectWrapper.createGraphObject();
+        GraphObject statusUpdate = GraphObject.Factory.create();
         String message = String.format(
                 "Check out my awesome new status update posted at: %s. Some chars for you: +\"[]:,", new Date());
         statusUpdate.setProperty("message", message);
@@ -336,10 +332,8 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
         Request request = Request.newPostRequest(session, graphPath, null, null);
         Response response = request.executeAndWait();
         // We will get a 400 error if the users are already friends.
-        FacebookException error = response.getError();
-        assertTrue(error == null ||
-                (error instanceof FacebookServiceErrorException && ((FacebookServiceErrorException) error)
-                        .getHttpResponseCode() == 400));
+        FacebookRequestError error = response.getError();
+        assertTrue(error == null || error.getRequestStatusCode() == 400);
     }
 
     protected void makeTestUsersFriends(TestSession session1, TestSession session2) {
@@ -352,6 +346,32 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
             Response response = responses.get(i);
             assertNotNull(response);
             assertNull(response.getError());
+        }
+    }
+
+    protected File createTempFileFromAsset(String assetPath) throws IOException {
+        InputStream inputStream = null;
+        FileOutputStream outStream = null;
+
+        try {
+            AssetManager assets = getInstrumentation().getContext().getResources().getAssets();
+            inputStream = assets.open(assetPath);
+
+            File outputDir = getActivity().getCacheDir(); // context being the Activity pointer
+            File outputFile = File.createTempFile("prefix", assetPath, outputDir);
+            outStream = new FileOutputStream(outputFile);
+
+            final int bufferSize = 1024 * 2;
+            byte[] buffer = new byte[bufferSize];
+            int n = 0;
+            while ((n = inputStream.read(buffer)) != -1) {
+                outStream.write(buffer, 0, n);
+            }
+
+            return outputFile;
+        } finally {
+            Utility.closeQuietly(outStream);
+            Utility.closeQuietly(inputStream);
         }
     }
 
@@ -525,7 +545,7 @@ public class FacebookActivityTestCase<T extends Activity> extends ActivityInstru
 
                 // We expect either success or failure.
                 if (expectSuccess && response.getError() != null) {
-                    throw response.getError();
+                    throw response.getError().getException();
                 } else if (!expectSuccess && response.getError() == null) {
                     throw new FacebookException("Expected failure case, received no error");
                 }

@@ -17,20 +17,22 @@
 package com.facebook.samples.hellofacebook;
 
 import android.app.AlertDialog;
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.location.Location;
 import android.os.Bundle;
-import android.support.v4.content.LocalBroadcastManager;
+import android.support.v4.app.Fragment;
+import android.support.v4.app.FragmentManager;
 import android.text.TextUtils;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.TextView;
 import com.facebook.*;
+import com.facebook.model.GraphObject;
+import com.facebook.model.GraphPlace;
+import com.facebook.model.GraphUser;
+import com.facebook.widget.*;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -43,10 +45,7 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
         add("publish_actions");
     }};
 
-    private final int PICK_FRIENDS_ACTIVITY = 1;
-    private final int PICK_PLACE_ACTIVITY = 2;
     private final int REAUTHORIZE_ACTIVITY = 3;
-    private final String APP_ID = "355198514515820";
     private final String PENDING_ACTION_BUNDLE_KEY = "com.facebook.samples.hellofacebook:PendingAction";
 
     private Button postStatusUpdateButton;
@@ -57,6 +56,8 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
     private ProfilePictureView profilePictureView;
     private TextView greeting;
     private PendingAction pendingAction = PendingAction.NONE;
+    private ViewGroup controlsContainer;
+
     private final Location SEATTLE_LOCATION = new Location("") {
         {
             setLatitude(47.6097);
@@ -80,7 +81,6 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
         setContentView(R.layout.main);
 
         loginButton = (LoginButton) findViewById(R.id.login_button);
-        loginButton.setApplicationId(APP_ID);
         loginButton.setUserInfoChangedCallback(new LoginButton.UserInfoChangedCallback() {
             @Override
             public void onUserInfoFetched(GraphUser user) {
@@ -122,6 +122,33 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
                 onClickPickPlace();
             }
         });
+
+        controlsContainer = (ViewGroup) findViewById(R.id.main_ui_container);
+
+        final FragmentManager fm = getSupportFragmentManager();
+        Fragment fragment = fm.findFragmentById(R.id.fragment_container);
+        if (fragment != null) {
+            // If we're being re-created and have a fragment, we need to a) hide the main UI controls and
+            // b) hook up its listeners again.
+            controlsContainer.setVisibility(View.GONE);
+            if (fragment instanceof FriendPickerFragment) {
+                setFriendPickerListeners((FriendPickerFragment) fragment);
+            } else if (fragment instanceof PlacePickerFragment) {
+                setPlacePickerListeners((PlacePickerFragment) fragment);
+            }
+        }
+
+        // Listen for changes in the back stack so we know if a fragment got popped off because the user
+        // clicked the back button.
+        fm.addOnBackStackChangedListener(new FragmentManager.OnBackStackChangedListener() {
+            @Override
+            public void onBackStackChanged() {
+                if (fm.getBackStackEntryCount() == 0) {
+                    // We need to re-show our UI.
+                    controlsContainer.setVisibility(View.VISIBLE);
+                }
+            }
+        });
     }
 
     @Override
@@ -129,18 +156,6 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
         super.onStart();
 
         updateUI();
-
-        IntentFilter filter = new IntentFilter();
-        filter.addAction(Session.ACTION_ACTIVE_SESSION_OPENED);
-        filter.addAction(Session.ACTION_ACTIVE_SESSION_CLOSED);
-        LocalBroadcastManager.getInstance(this).registerReceiver(receiver, filter);
-    }
-
-    @Override
-    protected void onStop() {
-        super.onStop();
-
-        LocalBroadcastManager.getInstance(this).unregisterReceiver(receiver);
     }
 
     @Override
@@ -158,62 +173,22 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
         pendingAction = PendingAction.values()[ordinal];
     }
 
-    public void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-
-        switch (requestCode) {
-            case PICK_FRIENDS_ACTIVITY:
-                String results = "";
-                if (resultCode == RESULT_OK) {
-                    HelloFacebookApplication application = (HelloFacebookApplication) getApplication();
-                    Collection<GraphUser> selection = application.getSelectedUsers();
-                    if (selection != null && selection.size() > 0) {
-                        ArrayList<String> names = new ArrayList<String>();
-                        for (GraphUser user : selection) {
-                            names.add(user.getName());
-                        }
-                        results = TextUtils.join(", ", names);
-                    } else {
-                        results = "<No friends selected>";
-                    }
-                } else {
-                    results = "<Cancelled>";
-                }
-
-                AlertDialog.Builder builder = new AlertDialog.Builder(this);
-                builder.setTitle("You picked:").setMessage(results).setPositiveButton("OK", null);
-                builder.show();
-
-                break;
-
-            case PICK_PLACE_ACTIVITY:
-                results = "";
-                if (resultCode == RESULT_OK) {
-                    HelloFacebookApplication application = (HelloFacebookApplication) getApplication();
-                    GraphPlace selection = application.getSelectedPlace();
-                    if (selection != null) {
-                        results = selection.getName();
-                    } else {
-                        results = "<No place selected>";
-                    }
-                } else {
-                    results = "<Cancelled>";
-                }
-
-                builder = new AlertDialog.Builder(this);
-                builder.setTitle("You picked:").setMessage(results).setPositiveButton("OK", null);
-                builder.show();
-
-                break;
-        }
-    }
-
     @Override
     protected void onSessionStateChange(SessionState state, Exception exception) {
         super.onSessionStateChange(state, exception);
-        if (state == SessionState.OPENED_TOKEN_UPDATED) {
+        if (pendingAction != PendingAction.NONE &&
+                exception instanceof FacebookOperationCanceledException) {
+            new AlertDialog.Builder(this)
+                    .setTitle(getString(R.string.cancelled))
+                    .setMessage(getString(R.string.permission_not_granted))
+                    .setPositiveButton(getString(R.string.ok), null)
+                    .show();
+            pendingAction = PendingAction.NONE;
+        } else if (state == SessionState.OPENED_TOKEN_UPDATED) {
             handlePendingAction();
         }
+
+        updateUI();
     }
 
     private void updateUI() {
@@ -226,17 +201,22 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
         pickPlaceButton.setEnabled(enableButtons);
 
         if (enableButtons && user != null) {
-            profilePictureView.setUserId(user.getId());
-            greeting.setText(String.format("Hello %s!", user.getFirstName()));
+            profilePictureView.setProfileId(user.getId());
+            greeting.setText(getString(R.string.hello_user, user.getFirstName()));
         } else {
-            profilePictureView.setUserId(null);
+            profilePictureView.setProfileId(null);
             greeting.setText(null);
         }
     }
 
     @SuppressWarnings("incomplete-switch")
     private void handlePendingAction() {
-        switch (pendingAction) {
+        PendingAction previouslyPendingAction = pendingAction;
+        // These actions may re-set pendingAction if they are still pending, but we assume they
+        // will succeed.
+        pendingAction = PendingAction.NONE;
+
+        switch (previouslyPendingAction) {
             case POST_PHOTO:
                 postPhoto();
                 break;
@@ -244,27 +224,26 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
                 postStatusUpdate();
                 break;
         }
-        pendingAction = PendingAction.NONE;
     }
 
     private interface GraphObjectWithId extends GraphObject {
         String getId();
     }
 
-    private void showAlert(String message, GraphObject result, Exception exception) {
+    private void showPublishResult(String message, GraphObject result, FacebookRequestError error) {
         String title = null;
         String alertMessage = null;
-        if (exception == null) {
-            title = "Success";
+        if (error == null) {
+            title = getString(R.string.success);
             String id = result.cast(GraphObjectWithId.class).getId();
-            alertMessage = String.format("Successfully posted '%s'.\nPost ID: %s", message, id);
+            alertMessage = getString(R.string.successfully_posted_post, message, id);
         } else {
-            title = "Error";
-            alertMessage = exception.getMessage();
+            title = getString(R.string.error);
+            alertMessage = error.getErrorMessage();
         }
 
         AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle(title).setMessage(alertMessage).setPositiveButton("OK", null);
+        builder.setTitle(title).setMessage(alertMessage).setPositiveButton(getString(R.string.ok), null);
         builder.show();
     }
 
@@ -273,14 +252,13 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
     }
 
     private void postStatusUpdate() {
-        if (user != null) {
-            final String message = String
-                    .format("Updating status for %s at %s", user.getFirstName(), (new Date().toString()));
+        if (user != null && hasPublishPermission()) {
+            final String message = getString(R.string.status_update, user.getFirstName(), (new Date().toString()));
             Request request = Request
                     .newStatusUpdateRequest(Session.getActiveSession(), message, new Request.Callback() {
                         @Override
                         public void onCompleted(Response response) {
-                            showAlert(message, response.getGraphObject(), response.getError());
+                            showPublishResult(message, response.getGraphObject(), response.getError());
                         }
                     });
             Request.executeBatchAsync(request);
@@ -294,32 +272,138 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
     }
 
     private void postPhoto() {
-        Bitmap image = BitmapFactory.decodeResource(this.getResources(), R.drawable.icon);
-        Request request = Request.newUploadPhotoRequest(Session.getActiveSession(), image, new Request.Callback() {
+        if (hasPublishPermission()) {
+            Bitmap image = BitmapFactory.decodeResource(this.getResources(), R.drawable.icon);
+            Request request = Request.newUploadPhotoRequest(Session.getActiveSession(), image, new Request.Callback() {
+                @Override
+                public void onCompleted(Response response) {
+                    showPublishResult(getString(R.string.photo_post), response.getGraphObject(), response.getError());
+                }
+            });
+            Request.executeBatchAsync(request);
+        } else {
+            pendingAction = PendingAction.POST_PHOTO;
+        }
+    }
+
+    private void showPickerFragment(PickerFragment<?> fragment) {
+        fragment.setOnErrorListener(new PickerFragment.OnErrorListener() {
             @Override
-            public void onCompleted(Response response) {
-                showAlert("Photo Post", response.getGraphObject(), response.getError());
+            public void onError(PickerFragment<?> pickerFragment, FacebookException error) {
+                showAlert(getString(R.string.error), error.getMessage());
             }
         });
-        Request.executeBatchAsync(request);
+
+        FragmentManager fm = getSupportFragmentManager();
+        fm.beginTransaction()
+                .replace(R.id.fragment_container, fragment)
+                .addToBackStack(null)
+                .commit();
+
+        controlsContainer.setVisibility(View.GONE);
+
+        // We want the fragment fully created so we can use it immediately.
+        fm.executePendingTransactions();
+
+        fragment.loadData(false);
     }
 
     private void onClickPickFriends() {
-        Intent intent = new Intent(this, PickFriendsActivity.class);
-        startActivityForResult(intent, PICK_FRIENDS_ACTIVITY);
+        final FriendPickerFragment fragment = new FriendPickerFragment();
+
+        setFriendPickerListeners(fragment);
+
+        showPickerFragment(fragment);
+    }
+
+    private void setFriendPickerListeners(final FriendPickerFragment fragment) {
+        fragment.setOnDoneButtonClickedListener(new FriendPickerFragment.OnDoneButtonClickedListener() {
+            @Override
+            public void onDoneButtonClicked(PickerFragment<?> pickerFragment) {
+                onFriendPickerDone(fragment);
+            }
+        });
+    }
+
+    private void onFriendPickerDone(FriendPickerFragment fragment) {
+        FragmentManager fm = this.getSupportFragmentManager();
+        fm.popBackStack();
+
+        String results = "";
+
+        Collection<GraphUser> selection = fragment.getSelection();
+        if (selection != null && selection.size() > 0) {
+            ArrayList<String> names = new ArrayList<String>();
+            for (GraphUser user : selection) {
+                names.add(user.getName());
+            }
+            results = TextUtils.join(", ", names);
+        } else {
+            results = this.getString(R.string.no_friends_selected);
+        }
+
+        showAlert(this.getString(R.string.you_picked), results);
+    }
+
+    private void onPlacePickerDone(PlacePickerFragment fragment) {
+        FragmentManager fm = getSupportFragmentManager();
+        fm.popBackStack();
+
+        String results = "";
+
+        GraphPlace selection = fragment.getSelection();
+        if (selection != null) {
+            results = selection.getName();
+        } else {
+            results = getString(R.string.no_place_selected);
+        }
+
+        showAlert(getString(R.string.you_picked), results);
     }
 
     private void onClickPickPlace() {
-        Intent intent = new Intent(this, PickPlaceActivity.class);
-        PickPlaceActivity.populateParameters(intent, SEATTLE_LOCATION, null);
-        startActivityForResult(intent, PICK_PLACE_ACTIVITY);
+        final PlacePickerFragment fragment = new PlacePickerFragment();
+        fragment.setLocation(SEATTLE_LOCATION);
+        fragment.setTitleText(getString(R.string.pick_seattle_place));
+
+        setPlacePickerListeners(fragment);
+
+        showPickerFragment(fragment);
+    }
+
+    private void setPlacePickerListeners(final PlacePickerFragment fragment) {
+        fragment.setOnDoneButtonClickedListener(new PlacePickerFragment.OnDoneButtonClickedListener() {
+            @Override
+            public void onDoneButtonClicked(PickerFragment<?> pickerFragment) {
+                onPlacePickerDone(fragment);
+            }
+        });
+        fragment.setOnSelectionChangedListener(new PlacePickerFragment.OnSelectionChangedListener() {
+            @Override
+            public void onSelectionChanged(PickerFragment<?> pickerFragment) {
+                if (fragment.getSelection() != null) {
+                    onPlacePickerDone(fragment);
+                }
+            }
+        });
+    }
+
+    private void showAlert(String title, String message) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle(title).setMessage(message).setPositiveButton(getString(R.string.ok), null);
+        builder.show();
+    }
+
+    private boolean hasPublishPermission() {
+        Session session = Session.getActiveSession();
+        return session != null && session.getPermissions().contains("publish_actions");
     }
 
     private void performPublish(PendingAction action) {
         Session session = Session.getActiveSession();
         if (session != null) {
             pendingAction = action;
-            if (session.getPermissions().contains("publish_actions")) {
+            if (hasPublishPermission()) {
                 // We can do the action right away.
                 handlePendingAction();
             } else {
@@ -331,13 +415,4 @@ public class HelloFacebookSampleActivity extends FacebookActivity {
             }
         }
     }
-
-    private BroadcastReceiver receiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            updateUI();
-        }
-    };
-
-
 }

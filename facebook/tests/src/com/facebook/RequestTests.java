@@ -22,11 +22,13 @@ import android.os.Bundle;
 import android.test.suitebuilder.annotation.LargeTest;
 import android.test.suitebuilder.annotation.MediumTest;
 import android.test.suitebuilder.annotation.SmallTest;
+import com.facebook.model.*;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.HttpURLConnection;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -46,7 +48,7 @@ public class RequestTests extends FacebookTestCase {
     @MediumTest
     @LargeTest
     public void testCreatePostRequest() {
-        GraphObject graphObject = GraphObjectWrapper.createGraphObject();
+        GraphObject graphObject = GraphObject.Factory.create();
         Request request = Request.newPostRequest(null, "me/statuses", graphObject, null);
         assertTrue(request != null);
         assertEquals(HttpMethod.POST, request.getHttpMethod());
@@ -278,14 +280,15 @@ public class RequestTests extends FacebookTestCase {
 
         assertTrue(response != null);
 
-        FacebookException exception = response.getError();
-        assertTrue(exception != null);
+        FacebookRequestError error = response.getError();
+        assertNotNull(error);
+        FacebookException exception = error.getException();
+        assertNotNull(exception);
 
-        assertTrue(exception instanceof FacebookServiceErrorException);
-        FacebookServiceErrorException serviceException = (FacebookServiceErrorException) exception;
-        assertTrue(serviceException.getFacebookErrorType() != null);
-        assertTrue(serviceException.getFacebookErrorCode() != FacebookServiceErrorException.UNKNOWN_ERROR_CODE);
-        assertTrue(serviceException.getResponseBody() != null);
+        assertTrue(exception instanceof FacebookServiceException);
+        assertNotNull(error.getErrorType());
+        assertTrue(error.getErrorCode() != FacebookRequestError.INVALID_ERROR_CODE);
+        assertNotNull(error.getRequestResultBody());
     }
 
     @LargeTest
@@ -301,13 +304,12 @@ public class RequestTests extends FacebookTestCase {
 
         assertTrue(response != null);
 
-        FacebookException exception = response.getError();
-        assertTrue(exception != null);
+        FacebookRequestError error = response.getError();
+        assertNotNull(error);
 
-        assertTrue(exception instanceof FacebookServiceErrorException);
-        FacebookServiceErrorException serviceException = (FacebookServiceErrorException) exception;
-        assertTrue(serviceException.getFacebookErrorCode() != FacebookServiceErrorException.UNKNOWN_ERROR_CODE);
-        assertTrue(serviceException.getResponseBody() != null);
+        assertTrue(error.getException() instanceof FacebookServiceException);
+        assertTrue(error.getErrorCode() != FacebookRequestError.INVALID_ERROR_CODE);
+        assertNotNull(error.getRequestResultBody());
     }
 
     @MediumTest
@@ -317,8 +319,7 @@ public class RequestTests extends FacebookTestCase {
         Request request = new Request(session, "me");
         Response response = request.executeAndWait();
 
-        FacebookException exception = response.getError();
-        assertNotNull(exception);
+        assertNotNull(response.getError());
     }
 
     @MediumTest
@@ -332,8 +333,7 @@ public class RequestTests extends FacebookTestCase {
     }
 
     static void validateMeResponse(TestSession session, Response response) {
-        FacebookException exception = response.getError();
-        assertNull(exception);
+        assertNull(response.getError());
 
         GraphUser me = response.getGraphObjectAs(GraphUser.class);
         assertNotNull(me);
@@ -394,8 +394,7 @@ public class RequestTests extends FacebookTestCase {
         Response response = request.executeAndWait();
         assertNotNull(response);
 
-        Exception exception = response.getError();
-        assertNull(exception);
+        assertNull(response.getError());
 
         GraphObject result = response.getGraphObject();
         assertNotNull(result);
@@ -422,17 +421,40 @@ public class RequestTests extends FacebookTestCase {
             Response response = request.executeAndWait();
             assertNotNull(response);
 
-            Exception exception = response.getError();
-            assertNull(exception);
+            assertNull(response.getError());
 
             GraphObject result = response.getGraphObject();
             assertNotNull(result);
         } finally {
             if (outStream != null) {
-                outStream.close();;
+                outStream.close();
             }
             if (outputFile != null) {
                 outputFile.delete();
+            }
+        }
+    }
+
+    @LargeTest
+    public void testUploadVideoFile() throws IOException, URISyntaxException {
+        File tempFile = null;
+        try {
+            TestSession session = openTestSessionWithSharedUser();
+            tempFile = createTempFileFromAsset("DarkScreen.mov");
+
+            Request request = Request.newUploadVideoRequest(session, tempFile, null);
+            Response response = request.executeAndWait();
+            assertNotNull(response);
+
+            assertNull(response.getError());
+
+            GraphObject result = response.getGraphObject();
+            assertNotNull(result);
+        } catch(Exception ex) {
+            return;
+        } finally {
+            if (tempFile != null) {
+                tempFile.delete();
             }
         }
     }
@@ -523,6 +545,70 @@ public class RequestTests extends FacebookTestCase {
         request.setGraphPath("me");
         request.setRestMethod("amethod");
         request.setCallback(new ExpectFailureCallback());
-        request.executeAndWait();
+
+        TestRequestAsyncTask task = new TestRequestAsyncTask(request);
+        task.executeOnBlockerThread();
+
+        waitAndAssertSuccess(1);
+    }
+
+    @MediumTest
+    @LargeTest
+    public void testClosedSessionDoesntAppendAccessToken() {
+        TestSession session = openTestSessionWithSharedUser();
+        session.close();
+        Request request = new Request(session, "me", null, null, new ExpectFailureCallback());
+
+        TestRequestAsyncTask task = new TestRequestAsyncTask(request);
+        task.executeOnBlockerThread();
+
+        waitAndAssertSuccess(1);
+    }
+
+    private final Location SEATTLE_LOCATION = new Location("") {
+        {
+            setLatitude(47.6097);
+            setLongitude(-122.3331);
+        }
+    };
+
+    public void testPaging() {
+        TestSession session = openTestSessionWithSharedUser();
+        final List<GraphPlace> returnedPlaces = new ArrayList<GraphPlace>();
+        Request request = Request.newPlacesSearchRequest(session, SEATTLE_LOCATION, 1000, 5, null, new Request.GraphPlaceListCallback() {
+            @Override
+            public void onCompleted(List<GraphPlace> places, Response response) {
+                returnedPlaces.addAll(places);
+            }
+        });
+        Response response = request.executeAndWait();
+
+        assertNull(response.getError());
+        assertNotNull(response.getGraphObject());
+        assertNotSame(0, returnedPlaces.size());
+
+        returnedPlaces.clear();
+
+        Request nextRequest = response.getRequestForPagedResults(Response.PagingDirection.NEXT);
+        assertNotNull(nextRequest);
+
+        nextRequest.setCallback(request.getCallback());
+        response = nextRequest.executeAndWait();
+
+        assertNull(response.getError());
+        assertNotNull(response.getGraphObject());
+        assertNotSame(0, returnedPlaces.size());
+
+        returnedPlaces.clear();
+
+        Request previousRequest = response.getRequestForPagedResults(Response.PagingDirection.PREVIOUS);
+        assertNotNull(previousRequest);
+
+        previousRequest.setCallback(request.getCallback());
+        response = previousRequest.executeAndWait();
+
+        assertNull(response.getError());
+        assertNotNull(response.getGraphObject());
+        assertNotSame(0, returnedPlaces.size());
     }
 }

@@ -24,6 +24,8 @@ import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import com.facebook.android.Util;
+import com.facebook.model.GraphObject;
+import com.facebook.internal.Validate;
 import org.json.JSONException;
 
 import java.lang.reflect.Field;
@@ -37,7 +39,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Allows some customization of sdk behavior.
  */
 public final class Settings {
-    static final String LOG_TAG_BASE = "FacebookSDK.";
     private static final HashSet<LoggingBehaviors> loggingBehaviors = new HashSet<LoggingBehaviors>();
     private static volatile Executor executor;
     private static final int DEFAULT_CORE_POOL_SIZE = 5;
@@ -217,7 +218,7 @@ public final class Settings {
     }
 
     /**
-     * Manually publish install attribution to the facebook graph.  Internally handles tracking repeat calls to prevent
+     * Manually publish install attribution to the Facebook graph.  Internally handles tracking repeat calls to prevent
      * multiple installs being published to the graph.
      * @param context
      * @return returns false on error.  Applications should retry until true is returned.  Safe to call again after
@@ -247,7 +248,7 @@ public final class Settings {
                 }
 
                 if ((Boolean)doesSupportAttribution) {
-                    GraphObject publishParams = GraphObjectWrapper.createGraphObject();
+                    GraphObject publishParams = GraphObject.Factory.create();
                     publishParams.setProperty(ANALYTICS_EVENT, MOBILE_INSTALL_EVENT);
                     publishParams.setProperty(ATTRIBUTION_KEY, attributionId);
 
@@ -258,11 +259,12 @@ public final class Settings {
 
                     // denote success since no error threw from the post.
                     SharedPreferences.Editor editor = preferences.edit();
-                    editor.putLong(pingKey, System.currentTimeMillis());
+                    lastPing = System.currentTimeMillis();
+                    editor.putLong(pingKey, lastPing);
                     editor.commit();
                 }
             }
-            return true;
+            return lastPing != 0;
         } catch (Exception e) {
             // if there was an error, fall through to the failure case.
             Util.logd("Facebook-publish", e.getMessage());

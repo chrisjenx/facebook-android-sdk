@@ -17,6 +17,12 @@
 package com.facebook;
 
 import android.content.Context;
+import com.facebook.model.GraphObject;
+import com.facebook.model.GraphObjectList;
+import com.facebook.internal.CacheableRequestBatch;
+import com.facebook.internal.FileLruCache;
+import com.facebook.internal.Logger;
+import com.facebook.internal.Utility;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -25,6 +31,8 @@ import org.json.JSONTokener;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -36,7 +44,7 @@ public class Response {
     private final GraphObject graphObject;
     private final GraphObjectList<GraphObject> graphObjectList;
     private final boolean isFromCache;
-    private final FacebookException error;
+    private final FacebookRequestError error;
     private final Request request;
 
     /**
@@ -50,13 +58,6 @@ public class Response {
 
     private static final String CODE_KEY = "code";
     private static final String BODY_KEY = "body";
-    private static final String ERROR_KEY = "error";
-    private static final String ERROR_TYPE_FIELD_KEY = "type";
-    private static final String ERROR_CODE_FIELD_KEY = "code";
-    private static final String ERROR_MESSAGE_FIELD_KEY = "message";
-    private static final String ERROR_CODE_KEY = "error_code";
-    private static final String ERROR_MSG_KEY = "error_msg";
-    private static final String ERROR_REASON_KEY = "error_reason";
 
     private static final String RESPONSE_LOG_TAG = "Response";
 
@@ -77,7 +78,7 @@ public class Response {
         this.error = null;
     }
 
-    private Response(Request request, HttpURLConnection connection, FacebookException error) {
+    private Response(Request request, HttpURLConnection connection, FacebookRequestError error) {
         this.request = request;
         this.connection = connection;
         this.graphObject = null;
@@ -87,17 +88,17 @@ public class Response {
     }
 
     /**
-     * Returns the error returned for this request, if any.
-     * 
-     * @return the error encountered, or null if the request succeeded
+     * Returns information about any errors that may have occurred during the request.
+     *
+     * @return the error from the server, or null if there was no server error
      */
-    public final FacebookException getError() {
+    public final FacebookRequestError getError() {
         return error;
     }
 
     /**
      * The single graph object returned for this request, if any.
-     * 
+     *
      * @return the graph object returned, or null if none was returned (or if the result was a list)
      */
     public final GraphObject getGraphObject() {
@@ -106,13 +107,10 @@ public class Response {
 
     /**
      * The single graph object returned for this request, if any, cast into a particular type of GraphObject.
-     * 
-     * @param graphObjectClass
-     *            the GraphObject-derived interface to cast the graph object into
-     * @return the graph object returned, or null if none was returned (or if the result was a list)
      *
-     * @throws FacebookException
-     *            If the passed in Class is not a valid GraphObject interface
+     * @param graphObjectClass the GraphObject-derived interface to cast the graph object into
+     * @return the graph object returned, or null if none was returned (or if the result was a list)
+     * @throws FacebookException If the passed in Class is not a valid GraphObject interface
      */
     public final <T extends GraphObject> T getGraphObjectAs(Class<T> graphObjectClass) {
         if (graphObject == null) {
@@ -126,7 +124,7 @@ public class Response {
 
     /**
      * The list of graph objects returned for this request, if any.
-     * 
+     *
      * @return the list of graph objects returned, or null if none was returned (or if the result was not a list)
      */
     public final GraphObjectList<GraphObject> getGraphObjectList() {
@@ -135,13 +133,10 @@ public class Response {
 
     /**
      * The list of graph objects returned for this request, if any, cast into a particular type of GraphObject.
-     * 
-     * @param graphObjectClass
-     *            the GraphObject-derived interface to cast the graph objects into
-     * @return the list of graph objects returned, or null if none was returned (or if the result was not a list)
      *
-     * @throws FacebookException
-     *            If the passed in Class is not a valid GraphObject interface
+     * @param graphObjectClass the GraphObject-derived interface to cast the graph objects into
+     * @return the list of graph objects returned, or null if none was returned (or if the result was not a list)
+     * @throws FacebookException If the passed in Class is not a valid GraphObject interface
      */
     public final <T extends GraphObject> GraphObjectList<T> getGraphObjectListAs(Class<T> graphObjectClass) {
         if (graphObjectList == null) {
@@ -153,7 +148,7 @@ public class Response {
     /**
      * Returns the HttpURLConnection that this response was generated from. If the response was retrieved
      * from the cache, this will be null.
-     * 
+     *
      * @return the connection, or null
      */
     public final HttpURLConnection getConnection() {
@@ -162,10 +157,67 @@ public class Response {
 
     /**
      * Returns the request that this response is for.
+     *
      * @return the request that this response is for
      */
     public Request getRequest() {
         return request;
+    }
+
+    /**
+     * Indicates whether paging is being done forward or backward.
+     */
+    public enum PagingDirection {
+        /**
+         * Indicates that paging is being performed in the forward direction.
+         */
+        NEXT,
+        /**
+         * Indicates that paging is being performed in the backward direction.
+         */
+        PREVIOUS
+    }
+
+    /**
+     * If a Response contains results that contain paging information, returns a new
+     * Request that will retrieve the next page of results, in whichever direction
+     * is desired. If no paging information is available, returns null.
+     *
+     * @param direction enum indicating whether to page forward or backward
+     * @return a Request that will retrieve the next page of results in the desired
+     *         direction, or null if no paging information is available
+     */
+    public Request getRequestForPagedResults(PagingDirection direction) {
+        String link = null;
+        if (graphObject != null) {
+            PagedResults pagedResults = graphObject.cast(PagedResults.class);
+            PagingInfo pagingInfo = pagedResults.getPaging();
+            if (pagingInfo != null) {
+                if (direction == PagingDirection.NEXT) {
+                    link = pagingInfo.getNext();
+                } else {
+                    link = pagingInfo.getPrevious();
+                }
+            }
+        }
+        if (Utility.isNullOrEmpty(link)) {
+            return null;
+        }
+
+        if (link != null && link.equals(request.getUrlForSingleRequest())) {
+            // We got the same "next" link as we just tried to retrieve. This could happen if cached
+            // data is invalid. All we can do in this case is pretend we have finished.
+            return null;
+        }
+
+        Request pagingRequest;
+        try {
+            pagingRequest = new Request(request.getSession(), new URL(link));
+        } catch (MalformedURLException e) {
+            return null;
+        }
+
+        return pagingRequest;
     }
 
     /**
@@ -182,11 +234,16 @@ public class Response {
 
         return new StringBuilder().append("{Response: ").append(" responseCode: ").append(responseCode)
                 .append(", graphObject: ").append(graphObject).append(", error: ").append(error)
-                .append(", isFromCache:" ).append(isFromCache).append("}")
+                .append(", isFromCache:").append(isFromCache).append("}")
                 .toString();
     }
 
-    final boolean getIsFromCache() {
+    /**
+     * Indicates whether the response was retrieved from a local cache or from the server.
+     *
+     * @return true if the response was cached locally, false if it was retrieved from the server
+     */
+    public final boolean getIsFromCache() {
         return isFromCache;
     }
 
@@ -201,24 +258,38 @@ public class Response {
         return responseCache;
     }
 
-    @SuppressWarnings("resource")
     static List<Response> fromHttpConnection(HttpURLConnection connection, RequestBatch requests) {
         InputStream stream = null;
 
-        // Try loading from cache.  If that fails, load from the network.
-        FileLruCache cache = getResponseCache();
-        String cacheKey = requests.getCacheKey();
-        if (!requests.getForceRoundTrip() && (cache != null) && (cacheKey != null)) {
-            try {
-                stream = cache.get(cacheKey);
-                if (stream != null) {
-                    return createResponsesFromStream(stream, null, requests, true);
+        FileLruCache cache = null;
+        String cacheKey = null;
+        if (requests instanceof CacheableRequestBatch) {
+            CacheableRequestBatch cacheableRequestBatch = (CacheableRequestBatch) requests;
+            cache = getResponseCache();
+            cacheKey = cacheableRequestBatch.getCacheKeyOverride();
+            if (Utility.isNullOrEmpty(cacheKey)) {
+                if (requests.size() == 1) {
+                    // Default for single requests is to use the URL.
+                    cacheKey = requests.get(0).getUrlForSingleRequest();
+                } else {
+                    Logger.log(LoggingBehaviors.REQUESTS, RESPONSE_CACHE_TAG,
+                            "Not using cache for cacheable request because no key was specified");
                 }
-            } catch (FacebookException exception) { // retry via roundtrip below
-            } catch (JSONException exception) {
-            } catch (IOException exception) {
-            } finally {
-                Utility.closeQuietly(stream);
+            }
+
+            // Try loading from cache.  If that fails, load from the network.
+            if (!cacheableRequestBatch.getForceRoundTrip() && cache != null && !Utility.isNullOrEmpty(cacheKey)) {
+                try {
+                    stream = cache.get(cacheKey);
+                    if (stream != null) {
+                        return createResponsesFromStream(stream, null, requests, true);
+                    }
+                } catch (FacebookException exception) { // retry via roundtrip below
+                } catch (JSONException exception) {
+                } catch (IOException exception) {
+                } finally {
+                    Utility.closeQuietly(stream);
+                }
             }
         }
 
@@ -275,6 +346,7 @@ public class Response {
 
         int numRequests = requests.size();
         List<Response> responses = new ArrayList<Response>(numRequests);
+        Object originalResult = object;
 
         if (numRequests == 1) {
             Request request = requests.get(0);
@@ -293,14 +365,14 @@ public class Response {
                 // Pretend we got an array of 1 back.
                 object = jsonArray;
             } catch (JSONException e) {
-                responses.add(new Response(request, connection, new FacebookException(e)));
+                responses.add(new Response(request, connection, new FacebookRequestError(connection, e)));
             } catch (IOException e) {
-                responses.add(new Response(request, connection, new FacebookException(e)));
+                responses.add(new Response(request, connection, new FacebookRequestError(connection, e)));
             }
         }
 
         if (!(object instanceof JSONArray) || ((JSONArray) object).length() != numRequests) {
-            FacebookException exception = new FacebookException("TODO unexpected number of results");
+            FacebookException exception = new FacebookException("Unexpected number of results");
             throw exception;
         }
 
@@ -310,30 +382,32 @@ public class Response {
             Request request = requests.get(i);
             try {
                 Object obj = jsonArray.get(i);
-                responses.add(createResponseFromObject(request, connection, obj, isFromCache));
+                responses.add(createResponseFromObject(request, connection, obj, isFromCache, originalResult));
             } catch (JSONException e) {
-                responses.add(new Response(request, connection, new FacebookException(e)));
+                responses.add(new Response(request, connection, new FacebookRequestError(connection, e)));
             } catch (FacebookException e) {
-                responses.add(new Response(request, connection, e));
+                responses.add(new Response(request, connection, new FacebookRequestError(connection, e)));
             }
         }
 
         return responses;
     }
 
-    private static Response createResponseFromObject(Request request, HttpURLConnection connection, Object object, boolean isFromCache) throws JSONException {
+    private static Response createResponseFromObject(Request request, HttpURLConnection connection, Object object,
+            boolean isFromCache, Object originalResult) throws JSONException {
         if (object instanceof JSONObject) {
             JSONObject jsonObject = (JSONObject) object;
 
-            FacebookServiceErrorException exception = checkResponseAndCreateException(jsonObject);
-            if (exception != null) {
-                if (exception.getFacebookErrorCode() == INVALID_SESSION_FACEBOOK_ERROR_CODE) {
+            FacebookRequestError error =
+                    FacebookRequestError.checkResponseAndCreateError(jsonObject, originalResult, connection);
+            if (error != null) {
+                if (error.getErrorCode() == INVALID_SESSION_FACEBOOK_ERROR_CODE) {
                     Session session = request.getSession();
                     if (session != null) {
                         session.closeAndClearTokenInformation();
                     }
                 }
-                throw exception;
+                return new Response(request, connection, error);
             }
 
             Object body = Utility.getStringPropertyAsJSON(jsonObject, BODY_KEY, NON_JSON_RESPONSE_PROPERTY);
@@ -341,9 +415,10 @@ public class Response {
             GraphObject graphObject = null;
             GraphObjectList<GraphObject> graphObjectList = null;
             if (body instanceof JSONObject) {
-                graphObject = GraphObjectWrapper.createGraphObject((JSONObject) body);
+                graphObject = GraphObject.Factory.create((JSONObject) body);
             } else if (body instanceof JSONArray) {
-                graphObjectList = GraphObjectWrapper.wrapArray((JSONArray) body, GraphObject.class);
+                graphObjectList = GraphObject.Factory
+                        .createList((JSONArray) body, GraphObject.class);
             }
             return new Response(request, connection, graphObject, graphObjectList, isFromCache);
         } else if (object == JSONObject.NULL) {
@@ -354,62 +429,27 @@ public class Response {
         }
     }
 
-    private static FacebookServiceErrorException checkResponseAndCreateException(JSONObject jsonObject) {
-        try {
-            if (jsonObject.has(CODE_KEY)) {
-                int responseCode = jsonObject.getInt(CODE_KEY);
-                Object body = Utility.getStringPropertyAsJSON(jsonObject, BODY_KEY, NON_JSON_RESPONSE_PROPERTY);
-
-                if (body != null && body instanceof JSONObject) {
-                    JSONObject jsonBody = (JSONObject) body;
-                    // Does this response represent an error from the service? We might get either an "error"
-                    // with several sub-properties, or else one or more top-level fields containing error info.
-                    String errorType = null;
-                    String errorMessage = null;
-                    int errorCode = -1;
-
-                    boolean hasError = false;
-                    if (jsonBody.has(ERROR_KEY)) {
-                        // We assume the error object is correctly formatted.
-                        JSONObject error = (JSONObject) Utility.getStringPropertyAsJSON(jsonBody, ERROR_KEY, null);
-
-                        errorType = error.optString(ERROR_TYPE_FIELD_KEY, null);
-                        errorMessage = error.optString(ERROR_MESSAGE_FIELD_KEY, null);
-                        errorCode = error.optInt(ERROR_CODE_FIELD_KEY, -1);
-                        hasError = true;
-                    } else if (jsonBody.has(ERROR_CODE_KEY) || jsonBody.has(ERROR_MSG_KEY)
-                            || jsonBody.has(ERROR_REASON_KEY)) {
-                        errorType = jsonBody.optString(ERROR_REASON_KEY, null);
-                        errorMessage = jsonBody.optString(ERROR_MSG_KEY, null);
-                        errorCode = jsonBody.optInt(ERROR_CODE_KEY, -1);
-                        hasError = true;
-                    }
-
-                    if (hasError) {
-                        return new FacebookServiceErrorException(responseCode, errorCode, errorType, errorMessage,
-                                jsonBody);
-                    }
-                }
-
-                // If we didn't get error details, but we did get a failure response code, report it.
-                if (responseCode < 200 || responseCode >= 300) {
-                    return new FacebookServiceErrorException(responseCode);
-                }
-            }
-        } catch (JSONException e) {
-        }
-
-        return null;
-    }
-
     static List<Response> constructErrorResponses(List<Request> requests, HttpURLConnection connection,
             FacebookException error) {
         int count = requests.size();
         List<Response> responses = new ArrayList<Response>(count);
         for (int i = 0; i < count; ++i) {
-            Response response = new Response(requests.get(i), connection, error);
+            Response response = new Response(requests.get(i), connection, new FacebookRequestError(connection, error));
             responses.add(response);
         }
         return responses;
     }
+
+    interface PagingInfo extends GraphObject {
+        String getNext();
+
+        String getPrevious();
+    }
+
+    interface PagedResults extends GraphObject {
+        GraphObjectList<GraphObject> getData();
+
+        PagingInfo getPaging();
+    }
+
 }
