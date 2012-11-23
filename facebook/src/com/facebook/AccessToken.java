@@ -16,11 +16,6 @@
 
 package com.facebook;
 
-import android.annotation.SuppressLint;
-import android.content.Intent;
-import android.os.Bundle;
-import com.facebook.internal.Utility;
-
 import java.io.InvalidObjectException;
 import java.io.ObjectInputStream;
 import java.io.Serializable;
@@ -28,6 +23,12 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+
+import com.facebook.internal.Utility;
+
+import android.annotation.SuppressLint;
+import android.content.Intent;
+import android.os.Bundle;
 
 final class AccessToken implements Serializable {
     private static final long serialVersionUID = 1L;
